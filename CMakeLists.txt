@@ -17,8 +17,12 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
 endif()
 
+set(DEFAULT_COMPRESSION_DIR "${CMAKE_SOURCE_DIR}/lp_configs")
+
 configure_file(include/directories.hpp.in include/directories.hpp @ONLY)
 
+
+find_package(OpenMP REQUIRED)
 find_package(LibPressio REQUIRED)
 find_package(LibPressioTools REQUIRED)
 find_package(std_compat REQUIRED)
@@ -32,7 +36,8 @@ target_sources(c_comparison
 
 target_include_directories(c_comparison
     PRIVATE
-    include/)
+      include/
+      ${CMAKE_CURRENT_BINARY_DIR}/include)
 
 target_compile_features(c_comparison PUBLIC cxx_std_14)
 target_link_libraries(c_comparison
@@ -42,4 +47,8 @@ target_link_libraries(c_comparison
       LibPressio::libpressio
       LibPressioTools::libpressio_meta
       OpenMP::OpenMP_CXX
+    )
+target_link_options(c_comparison
+    PRIVATE
+      -lquadmath
     )

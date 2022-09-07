@@ -1,106 +1,140 @@
+#include <algorithm>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
-#include <fstream>
+#include <random>
 #include <string>
+#include <vector>
 
-#include <libpressio_ext/cpp/json.h>
-#include <libpressio_ext/cpp/libpressio.h>
-#include <libpressio_meta.h>  //provides frsz
-#include <fstream>
-#include <nlohmann/json.hpp>
 
+#include <quadmath.h>
+#include <cmath>
+
+
+#include "compression_helper.hpp"
 #include "directories.hpp"
+#include "ieee_compression.hpp"
 
 
-template <typename ValueType, typename StorageType>
-struct compression_helper {
-    compression_helper(bool use_compr, std::string compressor,
-                       std::size_t num_rows, std::size_t num_vecs,
-                       std::string lp_config)
-        : use_compr_{use_compr},
-          compressor_(compressor),
-          num_rows_{num_rows},
-          plibrary_{},
-          pc_{},
-          in_temp_{},
-          out_temp_{},
-          p_data_vec_(use_compr_ ? 1 : 0),
-          metrics_plugins_{"time",     "size",     "error_stat",
-                           "clipping", "data_gap", "write_debug_inputs"}
-    {
-        using namespace std::string_literals;
-        if (use_compr_) {
-            libpressio_register_all();
-            std::ifstream pressio_input_file(lp_config);
-            nlohmann::json j;
-            pressio_input_file >> j;
-            pressio_options options_from_file(static_cast<pressio_options>(j));
-            pressio library;
-            pc_ = library.get_compressor("pressio");
-            pc_->set_options({
-                {"pressio:metric", "composite"s},
-                {"composite:plugins", metrics_plugins_},
-                // {"write_debug_inputs:write_input", true},
-                // {"write_debug_inputs:display_paths", true},
-                // {"write_debug_inputs:io", "posix"},
-            });
-            pc_->set_name("pressio");
-            pc_->set_options(options_from_file);
-            std::cerr << pc_->get_options() << std::endl;
-            const auto pressio_type = std::is_same<ValueType, float>::value
-                                          ? pressio_float_dtype
-                                          : pressio_double_dtype;
-            for (std::size_t i = 0; i < p_data_vec_.size(); ++i) {
-                p_data_vec_[i] =
-                    pressio_data::owning(pressio_type, {num_rows_});
-            }
-            in_temp_ = pressio_data::owning(pressio_type, {num_rows_});
-            out_temp_ = pressio_data::owning(pressio_type, {num_rows_});
+template <typename ArithmeticType, typename StorageType>
+ArithmeticType dot(std::size_t num_elems, const StorageType* a,
+                   const StorageType* b)
+{
+    ArithmeticType result = 0;
+    for (std::size_t i = 0; i < num_elems; ++i) {
+        result =
+            result + static_cast<ArithmeticType>(a[i]) * ArithmeticType(b[i]);
+        /*
+        if (a[i] < 0 || b[i] < 0) {
+            std::cerr << "Problem at index " << i << ": " << a[i] << ' ' << b[i]
+                      << '\n';
         }
+        */
+    }
+    return result;
+}
+
+
+template <typename ValueType>
+void run_error_analysis(const std::vector<ValueType>& vec_a,
+                        const std::vector<ValueType>& vec_b,
+                        std::vector<ValueType>& c_vec_a,
+                        std::vector<ValueType>& c_vec_b)
+{
+    assert((vec_a.size() == vec_b.size()));
+    const auto num_elems = vec_a.size();
+    const auto exact_res = static_cast<ValueType>(
+        dot<__float128>(num_elems, vec_a.data(), vec_b.data()));
+
+    std::vector<std::string> compression_json_files;
+    for (auto config_path :
+         std::filesystem::directory_iterator(DEFAULT_COMPRESSION_DIR)) {
+        compression_json_files.emplace_back(config_path.path().string());
+    }
+    std::sort(compression_json_files.begin(), compression_json_files.end());
+    for (auto config_file : compression_json_files) {
+        /*
+        benchmarks.emplace_back();
+        benchmarks.back().name = str_pre + "lp" + str_post;
+        benchmarks.back().settings = default_ss;
+        benchmarks.back().settings.storage_prec =
+            gko::solver::cb_gmres::storage_precision::use_sz;
+        benchmarks.back().settings.lp_config = config_file;
+        */
+        auto begin_file_name = config_file.rfind('/');
+        begin_file_name =
+            begin_file_name == std::string::npos ? 0 : begin_file_name + 1;
+        const auto file_name = config_file.substr(
+            begin_file_name, config_file.size() - begin_file_name - 5);
+
+        c_vec_a = vec_a;
+        c_vec_b = vec_b;
+        pressio_compression_helper<ValueType> helper(num_elems, config_file);
+        helper.compress(c_vec_a);
+        helper.compress(c_vec_b);
+        auto local_res =
+            dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
+        std::cout << file_name << " diff: " << std::abs(exact_res - local_res)
+                  << '\n';
+    }
+    {
+        c_vec_a = vec_a;
+        c_vec_b = vec_b;
+        ieee_compression_helper<ValueType, double> helper(num_elems);
+        helper.compress(c_vec_a);
+        helper.compress(c_vec_b);
+        auto local_res =
+            dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
+        std::cout << "double"
+                  << " diff: " << std::abs(exact_res - local_res) << '\n';
+    }
+    {
+        c_vec_a = vec_a;
+        c_vec_b = vec_b;
+        ieee_compression_helper<ValueType, float> helper(num_elems);
+        helper.compress(c_vec_a);
+        helper.compress(c_vec_b);
+        auto local_res =
+            dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
+        std::cout << "float"
+                  << " diff: " << std::abs(exact_res - local_res) << '\n';
+    }
+}
+
+
+int main()
+{
+    const std::size_t num_elems{10000};
+    using value_type = double;
+    std::vector<value_type> vec_a(num_elems);
+    std::vector<value_type> vec_b(num_elems);
+    std::vector<value_type> c_vec_a(num_elems);
+    std::vector<value_type> c_vec_b(num_elems);
+    for (std::size_t i = 0; i < num_elems; ++i) {
+        const auto a_val =
+            std::sin((static_cast<value_type>(i) / num_elems) * M_PI);
+        const auto b_val = a_val;
+        // const auto a_val = r_dist(r_engine);
+        // const auto b_val = r_dist(r_engine);
+        vec_a[i] = a_val;
+        vec_b[i] = b_val;
     }
 
-    void compress(std::size_t krylov_idx,
-                  gko::cb_gmres::Range3dHelper<ValueType, StorageType>& rhelper)
-    {
-        if (!use_compr_) {
-            return;
-        }
-        GKO_ASSERT(rhelper.get_range().length(2) == 1);
+    std::cout << "a and b use sinus for value generation\n";
+    std::cout << std::scientific << std::setprecision(6);
+    run_error_analysis(vec_a, vec_b, c_vec_a, c_vec_b);
 
-        const auto exec = rhelper.get_bases().get_executor().get();
-        const auto host_exec = exec->get_master().get();
-
-        // Reinterpret_cast necessary for type check if no compressor is used
-        auto raw_krylov_base = reinterpret_cast<ValueType*>(
-            rhelper.get_bases().get_data() + krylov_idx * num_rows_);
-        host_exec->copy_from(exec, num_rows_, raw_krylov_base,
-                             reinterpret_cast<ValueType*>(in_temp_.data()));
-        pc_->compress(&in_temp_, &p_data_vec_[0]);
-        pc_->decompress(&p_data_vec_[0], &out_temp_);
-        exec->copy_from(host_exec, num_rows_,
-                        reinterpret_cast<const ValueType*>(out_temp_.data()),
-                        raw_krylov_base);
+    std::random_device r_dev;
+    std::default_random_engine r_engine(r_dev());
+    std::uniform_real_distribution<double> r_dist(0, 1);
+    for (std::size_t i = 0; i < num_elems; ++i) {
+        const auto a_val = r_dist(r_engine);
+        const auto b_val = r_dist(r_engine);
+        vec_a[i] = a_val;
+        vec_b[i] = b_val;
     }
 
-    void print_metrics() const
-    {
-        if (false && use_compr_) {
-            std::cout << pc_->get_metrics_results() << '\n';
-        }
-    }
-
-
-private:
-    std::string compressor_;
-    bool use_compr_;
-    std::size_t num_rows_;
-    pressio plibrary_;
-    pressio_compressor pc_;
-    pressio_data in_temp_;
-    pressio_data out_temp_;
-    std::vector<pressio_data> p_data_vec_;
-    std::vector<std::string> metrics_plugins_;
-};
-
-int main() {
-    std::cout << "Configuration:\n";
+    std::cout << "a and b are randomly generated with unit distribution ["
+              << r_dist.a() << ", " << r_dist.b() << ")\n";
+    run_error_analysis(vec_a, vec_b, c_vec_a, c_vec_b);
 }
