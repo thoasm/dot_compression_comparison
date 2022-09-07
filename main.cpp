@@ -161,8 +161,8 @@ int main()
     std::cout << "a and b use sinus for value generation\n";
     run_error_analysis(vec_a, vec_b, c_vec_a, c_vec_b);
 
-    std::random_device r_dev;
-    std::default_random_engine r_engine(r_dev());
+    // std::random_device r_dev;
+    std::default_random_engine r_engine;  //(/*r_dev()*/);
     std::uniform_real_distribution<double> r_dist(0, 1);
     for (std::size_t i = 0; i < num_elems; ++i) {
         const auto a_val = r_dist(r_engine);
