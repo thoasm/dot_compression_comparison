@@ -34,11 +34,11 @@ struct pressio_compression_helper {
         pressio library;
         pc_ = library.get_compressor("pressio");
         pc_->set_options({
-            {"pressio:metric", "composite"s},
+            {"pressio:metric", "size"s},
             {"composite:plugins", metrics_plugins_},
-            // {"write_debug_inputs:write_input", true},
-            // {"write_debug_inputs:display_paths", true},
-            // {"write_debug_inputs:io", "posix"},
+            //{"write_debug_inputs:write_input", true},
+            //{"write_debug_inputs:display_paths", true},
+            //{"write_debug_inputs:io", "posix"},
         });
         pc_->set_name("pressio");
         pc_->set_options(options_from_file);
@@ -59,6 +59,8 @@ struct pressio_compression_helper {
         std::memcpy(in_temp_.data(), in_out_memory.data(),
                     num_rows_ * sizeof(ValueType));
         pc_->compress(&in_temp_, &compressed_memory_);
+        // std::cout << pc_->get_metrics_results() << '\n';
+        // std::cerr << pc_->get_options() << std::endl;
         pc_->decompress(&compressed_memory_, &out_temp_);
         std::memcpy(in_out_memory.data(), out_temp_.data(),
                     num_rows_ * sizeof(ValueType));
@@ -66,9 +68,16 @@ struct pressio_compression_helper {
 
     void print_metrics() const
     {
-        if (false) {
-            std::cout << pc_->get_metrics_results() << '\n';
-        }
+        std::cout << pc_->get_metrics_results() << '\n';
+        // std::cout << pc_->get_plugins() << '\n';
+    }
+
+    double get_compression_ratio() const
+    {
+        double ratio{};
+        pc_->get_metrics_results().get("/pressio/size:size:compression_ratio",
+                                       &ratio);
+        return ratio;
     }
 
 

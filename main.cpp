@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -8,12 +9,11 @@
 
 
 #include <quadmath.h>
-#include <cmath>
 
 
-#include "compression_helper.hpp"
 #include "directories.hpp"
-#include "ieee_compression.hpp"
+#include "ieee_compression_helper.hpp"
+#include "pressio_compression_helper.hpp"
 
 
 template <typename ArithmeticType, typename StorageType>
@@ -46,10 +46,39 @@ void run_error_analysis(const std::vector<ValueType>& vec_a,
     const auto exact_res = static_cast<ValueType>(
         dot<__float128>(num_elems, vec_a.data(), vec_b.data()));
 
+    const std::string delim = ";";
+    const std::size_t precision_digits = 6;
+    const std::string header_name = "Compression technique";
+    const std::string header_error = "Absolute error";
+    const std::string header_ratio = "Compression ratio";
+
+    std::cout << std::scientific << std::setprecision(precision_digits);
+
+    const auto get_width = [&precision_digits](const std::string& header) {
+        // fp output: x.<p_digits>e+00
+        return std::max(header.size(), 2 + precision_digits + 4) + 1;
+    };
+    const std::array<std::size_t, 3> widths{get_width(header_name),
+                                            get_width(header_error),
+                                            get_width(header_ratio)};
+
+    const auto print_line = [&delim, &widths](const std::string& name,
+                                              auto error, auto ratio) {
+        std::cout << std::setw(widths[0]) << name << delim
+                  << std::setw(widths[1]) << error << delim
+                  << std::setw(widths[2]) << ratio << '\n';
+    };
+
+    print_line(header_name, header_error, header_ratio);
+
+
     std::vector<std::string> compression_json_files;
     for (auto config_path :
          std::filesystem::directory_iterator(DEFAULT_COMPRESSION_DIR)) {
-        compression_json_files.emplace_back(config_path.path().string());
+        const auto path_string = config_path.path().string();
+        if (path_string.substr(path_string.size() - 5) == ".json") {
+            compression_json_files.emplace_back(path_string);
+        }
     }
     std::sort(compression_json_files.begin(), compression_json_files.end());
     for (auto config_file : compression_json_files) {
@@ -74,8 +103,13 @@ void run_error_analysis(const std::vector<ValueType>& vec_a,
         helper.compress(c_vec_b);
         auto local_res =
             dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
-        std::cout << file_name << " diff: " << std::abs(exact_res - local_res)
-                  << '\n';
+        // std::cout << file_name << " diff: " << std::abs(exact_res -
+        // local_res)
+        //          << '\n';
+        // helper.print_metrics();
+        // std::cout << "Ratio: " << helper.get_compression_ratio() << '\n';
+        print_line(file_name, std::abs(exact_res - local_res),
+                   helper.get_compression_ratio());
     }
     {
         c_vec_a = vec_a;
@@ -85,8 +119,10 @@ void run_error_analysis(const std::vector<ValueType>& vec_a,
         helper.compress(c_vec_b);
         auto local_res =
             dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
-        std::cout << "double"
-                  << " diff: " << std::abs(exact_res - local_res) << '\n';
+        // std::cout << "double"
+        //          << " diff: " << std::abs(exact_res - local_res) << '\n';
+        print_line("double", std::abs(exact_res - local_res),
+                   helper.get_compression_ratio());
     }
     {
         c_vec_a = vec_a;
@@ -96,8 +132,10 @@ void run_error_analysis(const std::vector<ValueType>& vec_a,
         helper.compress(c_vec_b);
         auto local_res =
             dot<ValueType>(num_elems, c_vec_a.data(), c_vec_b.data());
-        std::cout << "float"
-                  << " diff: " << std::abs(exact_res - local_res) << '\n';
+        // std::cout << "float"
+        //          << " diff: " << std::abs(exact_res - local_res) << '\n';
+        print_line("float", std::abs(exact_res - local_res),
+                   helper.get_compression_ratio());
     }
 }
 
@@ -121,7 +159,6 @@ int main()
     }
 
     std::cout << "a and b use sinus for value generation\n";
-    std::cout << std::scientific << std::setprecision(6);
     run_error_analysis(vec_a, vec_b, c_vec_a, c_vec_b);
 
     std::random_device r_dev;

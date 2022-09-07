@@ -1,3 +1,6 @@
+#pragma once
+
+#include <cassert>
 #include <string>
 #include <vector>
 
@@ -18,6 +21,13 @@ struct ieee_compression_helper {
         for (std::size_t i = 0; i < num_rows_; ++i) {
             in_out_memory[i] = compressed_memory_[i];
         }
+    }
+
+
+    double get_compression_ratio() const
+    {
+        return static_cast<double>(sizeof(ValueType)) /
+               static_cast<double>(sizeof(StorageType));
     }
 
 
